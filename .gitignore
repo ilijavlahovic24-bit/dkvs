@@ -1,0 +1,16 @@
+# Data files
+*.db
+
+# Local config/scripts
+launch.sh
+sharding.toml
+
+# Go build artifacts
+*.exe
+*.test
+/bin/
+/dist/
+
+# OS
+.DS_Store
+Thumbs.db
