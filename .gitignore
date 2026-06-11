@@ -3,6 +3,7 @@
 
 # Local config/scripts
 launch.sh
+launch.ps1
 sharding.toml
 
 # Go build artifacts

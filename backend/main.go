@@ -3,72 +3,70 @@ package main
 import (
 	"dkvs/config"
 	"dkvs/db"
+	"dkvs/replication"
 	"dkvs/web"
 	"flag"
 	"log"
 	"net/http"
-
-	"github.com/BurntSushi/toml"
 )
 
 // importovati moje package
 var (
-	dbLocation = flag.String("db-location", "", "The path to database")
-	httpAddr   = flag.String("http-addr", "127.0.0.1:8080", "HTTP host and port to listen on")
+	dbLocation = flag.String("db-location", "", "The path to the bolt db database")
+	httpAddr   = flag.String("http-addr", "127.0.0.1:8080", "HTTP host and port")
 	configFile = flag.String("config-file", "sharding.toml", "Config file for static sharding")
-	shardName  = flag.String("shard-name", "", "Shard name for this instance (required if config-file is provided)")
+	shard      = flag.String("shard", "", "The name of the shard for the data")
+	replica    = flag.Bool("replica", false, "Whether or not run as a read-only replica")
 )
 
 func parseFlags() {
 	flag.Parse()
 
 	if *dbLocation == "" {
-		log.Fatal("db-location flag is required")
+		log.Fatalf("Must provide db-location")
 	}
 
-	if *shardName != "" && *configFile == "" {
-		log.Fatal("config-file flag is required when shard-name is provided")
+	if *shard == "" {
+		log.Fatalf("Must provide shard")
 	}
 }
 
 func main() {
 	parseFlags()
 
-	var c config.Config
-	if _, err := toml.DecodeFile(*configFile, &c); err != nil {
-		log.Fatalf("toml.DecodeFile(%q): %v", *configFile, err)
-	}
-
-	var shardCount int
-	var shardIdx int = -1
-	var addrs = make(map[int]string)
-
-	for _, s := range c.Shards {
-		addrs[s.Idx] = s.Address
-
-		if s.Idx+1 > shardCount {
-			shardCount = s.Idx + 1
-		}
-		if s.Name == *shardName {
-			shardIdx = s.Idx
-		}
-	}
-
-	if shardIdx < 0 {
-		log.Fatalf("Shard %q was not found", *shardName)
-	}
-	log.Printf("Shard count is %d, current shard: %d", shardCount, shardIdx)
-
-	db, close, err := db.NewDatabase(*dbLocation)
+	c, err := config.ParseFile(*configFile)
 	if err != nil {
-		log.Fatalf("NewDatabase(%q): %v", *dbLocation, err)
+		log.Fatalf("Error parsing config %q: %v", *configFile, err)
+	}
+
+	shards, err := config.ParseShards(c.Shards, *shard)
+	if err != nil {
+		log.Fatalf("Error parsing shards config: %v", err)
+	}
+
+	log.Printf("Shard count is %d, current shard: %d", shards.Count, shards.CurIdx)
+
+	db, close, err := db.NewDatabase(*dbLocation, *replica)
+	if err != nil {
+		log.Fatalf("Error creating %q: %v", *dbLocation, err)
 	}
 	defer close()
 
-	srv := web.NewServer(db, shardIdx, shardCount, addrs)
+	if *replica {
+		leaderAddr, ok := shards.Addrs[shards.CurIdx]
+		if !ok {
+			log.Fatalf("Could not find address for leader for shard %d", shards.CurIdx)
+		}
+		go replication.ClientLoop(db, leaderAddr)
+	}
+
+	srv := web.NewServer(db, shards)
 
 	http.HandleFunc("/get", srv.GetHandler)
 	http.HandleFunc("/set", srv.SetHandler)
+	http.HandleFunc("/purge", srv.DeleteExtraKeysHandler)
+	http.HandleFunc("/next-replication-key", srv.GetNextKeyForReplication)
+	http.HandleFunc("/delete-replication-key", srv.DeleteReplicationKey)
 
 	log.Fatal(http.ListenAndServe(*httpAddr, nil))
 }

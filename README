@@ -31,10 +31,10 @@ cd backend
 DKVS/
 ├── frontend/       #Includes Dashboard with real-time performances
 └── backend/        # includes whole logic of store
-    ├──config       # structure of shard
+    ├──config       # operations on shards
     ├──db\          # operations on database like get and set
-    ├──web\         #http handler
-
+    ├──web\         # http handler
+    └──replication  # replication
 
 ### In Progress
 -Distributed get and Set opeartions
