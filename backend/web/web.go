@@ -105,3 +105,7 @@ func (s *Server) DeleteReplicationKey(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "ok")
 }
+
+func (s *Server) MetricsHandler(w http.ResponseWriter, r *http.Request) {
+	// This is a placeholder for the metrics handler. You can implement the logic to gather and return metrics here.
+}

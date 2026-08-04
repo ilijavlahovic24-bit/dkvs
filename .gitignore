@@ -11,7 +11,7 @@ sharding.toml
 *.test
 /bin/
 /dist/
-
+/doc/
 # OS
 .DS_Store
 Thumbs.db
