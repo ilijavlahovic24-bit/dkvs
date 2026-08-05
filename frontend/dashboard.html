@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Alpine.js in HTML Example</title>
+    <!-- Include Alpine.js via CDN -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body>
+
+    <!-- 1. Define a component and state with x-data -->
+    <div x-data="{ open: false, count: 0, message: 'Hello Alpine!' }">
+        
+        <!-- 2. Bind text using x-text -->
+        <h1 x-text="message"></h1>
+
+        <!-- 3. Toggle visibility using x-show and click events with @click -->
+        <button @click="open = !open">Toggle Dropdown</button>
+        <div x-show="open" style="padding: 10px; background: #eee;">
+            <p>Dropdown content is now visible!</p>
+        </div>
+
+        <!-- 4. Handle simple math/state operations -->
+        <div style="margin-top: 20px;">
+            <button @click="count++">Increment</button>
+            <span x-text="count"></span>
+        </div>
+
+    </div>
+
+</body>
+</html>
