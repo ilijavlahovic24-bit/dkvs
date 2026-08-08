@@ -1,6 +1,7 @@
 # Data files
 *.db
 
+
 # Go build artifacts
 *.exe
 *.test
