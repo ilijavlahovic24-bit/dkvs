@@ -1,0 +1,17 @@
+[[shards]]
+name="Belgrade"
+idx=0
+address = "localhost:8080"
+replicas = ["127.0.0.22:8080"]
+
+[[shards]]
+name="Nis"
+idx=1
+address = "localhost:8081"
+replicas = ["127.0.0.33:8080"]
+
+[[shards]]
+name="Kragujevac"
+idx=2
+address = "localhost:8082"
+replicas = ["127.0.0.44:8080"]
