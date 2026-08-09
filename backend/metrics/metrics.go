@@ -1,8 +1,6 @@
 package metrics
 
 import (
-	"dkvs/web"
-	"net/http"
 	"sync/atomic"
 )
 
@@ -26,16 +24,4 @@ func (m *Metrics) IncrementWrites() {
 
 func (m *Metrics) IncrementErrors() {
 	atomic.AddUint64(&m.Errors, 1)
-}
-func MeasureSetHandler(s *web.Server, m *Metrics) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		m.IncrementWrites()
-		s.SetHandler(w, r)
-	}
-}
-func MeasureGetHandler(s *web.Server, m *Metrics) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		m.IncrementReads()
-		s.GetHandler(w, r)
-	}
 }

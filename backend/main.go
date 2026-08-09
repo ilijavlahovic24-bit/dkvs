@@ -67,7 +67,9 @@ func main() {
 	http.HandleFunc("/purge", srv.DeleteExtraKeysHandler)
 	http.HandleFunc("/next-replication-key", srv.GetNextKeyForReplication)
 	http.HandleFunc("/delete-replication-key", srv.DeleteReplicationKey)
+
 	http.HandleFunc("/metrics", srv.MetricsHandler)
+	http.HandleFunc("/dashboard", srv.DashboardHandler)
 	log.Fatal(http.ListenAndServe(*httpAddr, nil))
 }
 

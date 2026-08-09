@@ -3,6 +3,7 @@ package web
 import (
 	"dkvs/config"
 	"dkvs/db"
+	"dkvs/metrics"
 	"dkvs/replication"
 	"encoding/json"
 	"fmt"
@@ -108,4 +109,22 @@ func (s *Server) DeleteReplicationKey(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// This is a placeholder for the metrics handler. You can implement the logic to gather and return metrics here.
+
+}
+
+func (s *Server) DashboardHandler(w http.ResponseWriter, r *http.Request) {
+	// This is a placeholder for the dashboard handler. You can implement the logic to render a dashboard here.
+}
+
+func MeasureSetHandler(s *Server, m *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m.IncrementWrites()
+		s.SetHandler(w, r)
+	}
+}
+func MeasureGetHandler(s *Server, m *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m.IncrementReads()
+		s.GetHandler(w, r)
+	}
 }
