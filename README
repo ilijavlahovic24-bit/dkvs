@@ -38,14 +38,17 @@ DKVS/
     ├──metrics\     # metrics
     └──replication  # replication
 
-### In Progress
+### Completed
 -Distributed get and Set opeartions
 -Distributed sharding
 
-### Planned
+### In Progress
 LSM-Tree implementation - Kleppmann
-Consistency guarantees - Kleppmann
 Web dashboard - 
+
+### Planned
+Consistency guarantees - Kleppmann
+
 
 ## References and Documentation
 1. [Yuriy Nasretdinov - Distributed Key-Value Database in Go](https://www.youtube.com/playlist?list=PLWwSgbaBp9XrMkjEhmTIC37WX2JfwZp7I) - primary guide
