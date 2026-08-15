@@ -34,6 +34,8 @@ DKVS/
     ├──config       # operations on shards
     ├──db\          # operations on database like get and set
     ├──web\         # http handler
+    ├──lsm\         # LSM storage engine
+    ├──metrics\     # metrics
     └──replication  # replication
 
 ### In Progress
