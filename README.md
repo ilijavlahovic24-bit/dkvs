@@ -28,7 +28,7 @@ cd backend
 
 
 ## Project Structure
-DKVS/
+```DKVS/
 ├── frontend/       #Includes Dashboard with real-time performances
 └── backend/        # includes whole logic of store
     ├──config       # operations on shards
@@ -37,7 +37,7 @@ DKVS/
     ├──lsm\         # LSM storage engine
     ├──metrics\     # metrics
     └──replication  # replication
-
+```
 ### Completed
 -Distributed get and Set opeartions
 -Distributed sharding
