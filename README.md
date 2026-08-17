@@ -43,8 +43,8 @@ DKVS/
 -Distributed sharding
 
 ### In Progress
-LSM-Tree implementation - Kleppmann
-Web dashboard - 
+-LSM-Tree implementation - Kleppmann
+-Web dashboard
 
 ### Planned
 Consistency guarantees - Kleppmann
