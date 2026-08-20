@@ -15,6 +15,8 @@ type IndexBlock struct {
 type Footer struct {
 	// The Footer stores metadata like the file’s key range (min and max key),
 	// which is critical for compaction decisions and for quickly ruling out files during reads.
+	min_key int64
+	max_key int64
 }
 
 type SSTable struct {

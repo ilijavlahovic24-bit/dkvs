@@ -53,4 +53,4 @@ Consistency guarantees - Kleppmann
 ## References and Documentation
 1. [Yuriy Nasretdinov - Distributed Key-Value Database in Go](https://www.youtube.com/playlist?list=PLWwSgbaBp9XrMkjEhmTIC37WX2JfwZp7I) - primary guide
 2. [*Designing Data-Intensive Applications* - Martin Kleppmann] - reference for LSM-Tree and consistency
-3/ [medium.com -lsm trees the complete guide to wal memtables sstables compaction bloom filters -@harshithgowdakt ]
+3. [medium.com -lsm trees the complete guide to wal memtables sstables compaction bloom filters -@harshithgowdakt ]
