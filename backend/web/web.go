@@ -13,15 +13,17 @@ import (
 
 // Server contains HTTP method handlers to be used for the database.
 type Server struct {
-	db     *db.DB
-	shards *config.Shards
+	db      *db.DB
+	shards  *config.Shards
+	metrics *metrics.Metrics
 }
 
 // NewServer creates a new instance with HTTP handlers to be used to get and set values.
-func NewServer(db *db.DB, shards *config.Shards) *Server {
+func NewServer(db *db.DB, shards *config.Shards, metrics *metrics.Metrics) *Server {
 	return &Server{
-		db:     db,
-		shards: shards,
+		db:      db,
+		shards:  shards,
+		metrics: metrics,
 	}
 }
 func (s *Server) redirect(shard int, w http.ResponseWriter, r *http.Request) {

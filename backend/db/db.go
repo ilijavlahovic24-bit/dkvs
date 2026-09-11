@@ -161,3 +161,18 @@ func (d *DB) DeleteExtraKeys(isExtra func(string) bool) error {
 		return nil
 	})
 }
+
+func (d *DB) KeyCount() int {
+	count := 0
+	_ = d.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(defaultBucket)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, _ []byte) error {
+			count++
+			return nil
+		})
+	})
+	return count
+}

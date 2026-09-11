@@ -3,6 +3,7 @@ package main
 import (
 	"dkvs/config"
 	"dkvs/db"
+	"dkvs/metrics"
 	"dkvs/replication"
 	"dkvs/web"
 	"flag"
@@ -60,7 +61,8 @@ func main() {
 		go replication.ClientLoop(db, leaderAddr)
 	}
 
-	srv := web.NewServer(db, shards)
+	metrics := metrics.New(*shard, shards.CurIdx)
+	srv := web.NewServer(db, shards, metrics)
 
 	http.HandleFunc("/get", srv.GetHandler)
 	http.HandleFunc("/set", srv.SetHandler)
