@@ -1,32 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Alpine.js in HTML Example</title>
-    <!-- Include Alpine.js via CDN -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <meta charset="UTF-8">
+  <title>DKVS Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
+    .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin-bottom: 2rem; }
+    .card { background: #1e293b; padding: 1rem; border-radius: 8px; }
+    .card h3 { margin: 0 0 .5rem; font-size: .8rem; color: #94a3b8; text-transform: uppercase; }
+    .card .val { font-size: 1.8rem; font-weight: 700; }
+    .panel { background: #1e293b; padding: 1rem; border-radius: 8px; margin-top: 1rem; }
+    input, select, button { padding: .5rem; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; }
+    button { background: #3b82f6; cursor: pointer; }
+  </style>
 </head>
-<body>
+<body x-data="dashboard()" x-init="init()">
+  <h1>DKVS <span x-text="meta.shard_name"></span> (shard <span x-text="meta.shard_idx"></span>)</h1>
 
-    <!-- 1. Define a component and state with x-data -->
-    <div x-data="{ open: false, count: 0, message: 'Hello Alpine!' }">
-        
-        <!-- 2. Bind text using x-text -->
-        <h1 x-text="message"></h1>
+  <div class="cards">
+    <div class="card"><h3>Uptime</h3><div class="val" x-text="meta.uptime"></div></div>
+    <div class="card"><h3>Reads</h3><div class="val" x-text="meta.reads"></div></div>
+    <div class="card"><h3>Writes</h3><div class="val" x-text="meta.writes"></div></div>
+    <div class="card"><h3>Errors</h3><div class="val" x-text="meta.errors"></div></div>
+    <div class="card"><h3>Keys</h3><div class="val" x-text="meta.key_count"></div></div>
+  </div>
 
-        <!-- 3. Toggle visibility using x-show and click events with @click -->
-        <button @click="open = !open">Toggle Dropdown</button>
-        <div x-show="open" style="padding: 10px; background: #eee;">
-            <p>Dropdown content is now visible!</p>
-        </div>
+  <div class="panel">
+    <canvas id="chart" height="80"></canvas>
+  </div>
 
-        <!-- 4. Handle simple math/state operations -->
-        <div style="margin-top: 20px;">
-            <button @click="count++">Increment</button>
-            <span x-text="count"></span>
-        </div>
+  <div class="panel">
+    <h3>REST Panel</h3>
+    <select x-model="op">
+      <option>GET</option><option>SET</option><option>DELETE</option>
+    </select>
+    <input placeholder="key" x-model="key">
+    <input placeholder="value" x-model="value">
+    <button @click="send()">Send</button>
+    <pre x-text="response"></pre>
+  </div>
 
-    </div>
-
+  <script>
+    function dashboard() {
+      return {
+        meta: {},
+        op: 'GET', key: '', value: '', response: '',
+        chart: null,
+        async init() {
+          const ctx = document.getElementById('chart');
+          this.chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: [], datasets: [
+              { label: 'Reads',  data: [], borderColor: '#3b82f6', tension: .3 },
+              { label: 'Writes', data: [], borderColor: '#10b981', tension: .3 },
+            ]},
+            options: { animation: false, scales: { x: { display: false } } }
+          });
+          await this.poll();
+          setInterval(() => this.poll(), 2000);
+        },
+        async poll() {
+          const r = await fetch('/metrics');
+          this.meta = await r.json();
+          const c = this.chart;
+          c.data.labels.push('');
+          c.data.datasets[0].data.push(this.meta.reads);
+          c.data.datasets[1].data.push(this.meta.writes);
+          if (c.data.labels.length > 30) {
+            c.data.labels.shift();
+            c.data.datasets.forEach(d => d.data.shift());
+          }
+          c.update();
+        },
+        async send() {
+          const url = `/${this.op.toLowerCase()}?key=${encodeURIComponent(this.key)}&value=${encodeURIComponent(this.value)}`;
+          const r = await fetch(url);
+          this.response = await r.text();
+        }
+      };
+    }
+  </script>
 </body>
 </html>
