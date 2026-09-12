@@ -43,6 +43,7 @@ func (s *Server) redirect(shard int, w http.ResponseWriter, r *http.Request) {
 
 // GetHandler handles read requests from the database.
 func (s *Server) GetHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	r.ParseForm()
 	key := r.Form.Get("key")
 
@@ -62,6 +63,7 @@ func (s *Server) GetHandler(w http.ResponseWriter, r *http.Request) {
 
 // SetHandler handles write requests from the database.
 func (s *Server) SetHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	r.ParseForm()
 	key := r.Form.Get("key")
 	value := r.Form.Get("value")
