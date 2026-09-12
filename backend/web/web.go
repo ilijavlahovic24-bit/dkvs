@@ -54,7 +54,9 @@ func (s *Server) GetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	value, err := s.db.GetKey(key)
-
+	if err != nil && s.metrics != nil {
+		s.metrics.IncrementErrors()
+	}
 	fmt.Fprintf(w, "Shard = %d, current shard = %d, addr = %q, Value = %q, error = %v", shard, s.shards.CurIdx, s.shards.Addrs[shard], value, err)
 }
 
@@ -71,6 +73,9 @@ func (s *Server) SetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := s.db.SetKey(key, []byte(value))
+	if err != nil && s.metrics != nil {
+		s.metrics.IncrementErrors()
+	}
 	fmt.Fprintf(w, "Error = %v, shardIdx = %d, current shard = %d", err, shard, s.shards.CurIdx)
 }
 
@@ -110,23 +115,37 @@ func (s *Server) DeleteReplicationKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) MetricsHandler(w http.ResponseWriter, r *http.Request) {
-	// This is a placeholder for the metrics handler. You can implement the logic to gather and return metrics here.
-
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+	if s.metrics == nil {
+		http.Error(w, "metrics not configured", http.StatusInternalServerError)
+		return
+	}
+	snap := s.metrics.Snapshot(s.db.KeyCount())
+	if err := json.NewEncoder(w).Encode(snap); err != nil {
+		s.metrics.IncrementErrors()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) DashboardHandler(w http.ResponseWriter, r *http.Request) {
-	// This is a placeholder for the dashboard handler. You can implement the logic to render a dashboard here.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	http.ServeFile(w, r, "frontend/dashboard.html")
 }
 
-func MeasureSetHandler(s *Server, m *metrics.Metrics) http.HandlerFunc {
+func MeasureSetHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		m.IncrementWrites()
+		if s.metrics != nil {
+			s.metrics.IncrementWrites()
+		}
 		s.SetHandler(w, r)
 	}
 }
-func MeasureGetHandler(s *Server, m *metrics.Metrics) http.HandlerFunc {
+func MeasureGetHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		m.IncrementReads()
+		if s.metrics != nil {
+			s.metrics.IncrementReads()
+		}
 		s.GetHandler(w, r)
 	}
 }

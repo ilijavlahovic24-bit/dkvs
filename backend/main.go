@@ -64,14 +64,15 @@ func main() {
 	metrics := metrics.New(*shard, shards.CurIdx)
 	srv := web.NewServer(db, shards, metrics)
 
-	http.HandleFunc("/get", srv.GetHandler)
-	http.HandleFunc("/set", srv.SetHandler)
+	http.HandleFunc("/get", web.MeasureGetHandler(srv))
+	http.HandleFunc("/set", web.MeasureSetHandler(srv))
 	http.HandleFunc("/purge", srv.DeleteExtraKeysHandler)
 	http.HandleFunc("/next-replication-key", srv.GetNextKeyForReplication)
 	http.HandleFunc("/delete-replication-key", srv.DeleteReplicationKey)
 
 	http.HandleFunc("/metrics", srv.MetricsHandler)
 	http.HandleFunc("/dashboard", srv.DashboardHandler)
+	log.Printf("Listening on %s (shard=%s, replica=%v)", *httpAddr, *shard, *replica)
 	log.Fatal(http.ListenAndServe(*httpAddr, nil))
 }
 
