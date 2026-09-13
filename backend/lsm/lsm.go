@@ -10,8 +10,12 @@ type LSM struct {
 	dataDir  string
 }
 
-func NewLSM(dataDir string) (*LSM, error)
-func (l *LSM) Set(key string, value []byte) error
+func NewLSM(dataDir string) (*LSM, error) {
+	return nil, nil
+}
+func (l *LSM) Set(key string, value []byte) error {
+	return nil
+}
 func (l *LSM) Get(key string) ([]byte, error) {
 	//1. Check the active MemTable. If the key is found, return it — this is the freshest data.
 
@@ -25,5 +29,9 @@ func (l *LSM) Get(key string) ([]byte, error) {
 	//5. If no match is found anywhere, the key does not exist.
 	return nil, nil
 }
-func (l *LSM) Delete(key string) error
-func (l *LSM) Close() error
+func (l *LSM) Delete(key string) error {
+	return nil
+}
+func (l *LSM) Close() error {
+	return nil
+}
