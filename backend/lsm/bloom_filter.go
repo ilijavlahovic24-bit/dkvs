@@ -15,7 +15,7 @@ type BloomFilter struct {
 	numHash uint64   // k
 }
 
-// Tipične vrednosti: expectedKeys=10000, falsePositiveRate=0.01 (1%).
+// Expected values: expectedKeys=10000, falsePositiveRate=0.01 (1%).
 // Formula:
 //
 //	m = -n * ln(p) / (ln(2))^2
@@ -74,7 +74,7 @@ func (b *BloomFilter) Add(key string) {
 	h1 := hashA(key)
 	h2 := hashB(key)
 	if h2 == 0 {
-		h2 = 1 // sprečava da sve hash-eve budu iste
+		h2 = 1 // Avoid zero to ensure we get k distinct hash values
 	}
 
 	for i := uint64(0); i < b.numHash; i++ {
@@ -109,6 +109,7 @@ func (b *BloomFilter) Encode() []byte {
 	return buf
 }
 
+// DecodeBloomFilter decodes a BloomFilter from a byte slice. It expects the format produced by Encode.
 func DecodeBloomFilter(data []byte) (*BloomFilter, error) {
 	if len(data) < 16 {
 		return nil, errors.New("bloom: data too short")
