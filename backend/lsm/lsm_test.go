@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// --- WAL Tests ---//
+
 // newTestWAL otvara WAL u temp direktorijumu i registruje cleanup.
 func newTestWAL(t *testing.T) (*WAL, string) {
 	t.Helper()
@@ -409,4 +411,251 @@ func BenchmarkWALAppendParallel(b *testing.B) {
 			w.Append("k", []byte("v"))
 		}
 	})
+}
+
+// --- Memtable Tests ---//
+
+func TestMemtableSetGet(t *testing.T) {
+	m := NewMemtable()
+
+	m.Set("foo", []byte("bar"))
+	m.Set("hello", []byte("world"))
+
+	v, ok := m.Get("foo")
+	if !ok || string(v) != "bar" {
+		t.Fatalf("Get(foo) = %q, %v", v, ok)
+	}
+	v, ok = m.Get("hello")
+	if !ok || string(v) != "world" {
+		t.Fatalf("Get(hello) = %q, %v", v, ok)
+	}
+}
+
+func TestMemtableGetMissing(t *testing.T) {
+	m := NewMemtable()
+	v, ok := m.Get("nope")
+	if ok {
+		t.Fatalf("expected not found, got %q", v)
+	}
+}
+
+func TestMemtableEmptyValue(t *testing.T) {
+	m := NewMemtable()
+	m.Set("empty", []byte{})
+
+	v, ok := m.Get("empty")
+	if !ok {
+		t.Fatal("expected found")
+	}
+	if v == nil {
+		t.Fatal("empty value should be non-nil slice, not nil (that's tombstone)")
+	}
+	if len(v) != 0 {
+		t.Fatalf("want empty, got %q", v)
+	}
+}
+
+func TestMemtableNilValueNormalized(t *testing.T) {
+	m := NewMemtable()
+	m.Set("k", nil) // nil se normalizuje u []byte{}
+
+	v, ok := m.Get("k")
+	if !ok {
+		t.Fatal("expected found")
+	}
+	if v == nil {
+		t.Fatal("nil value must be normalized, otherwise it looks like tombstone")
+	}
+}
+
+func TestMemtableOverwrite(t *testing.T) {
+	m := NewMemtable()
+	m.Set("k", []byte("v1"))
+	m.Set("k", []byte("v2"))
+
+	v, ok := m.Get("k")
+	if !ok || string(v) != "v2" {
+		t.Fatalf("want v2, got %q (ok=%v)", v, ok)
+	}
+	if m.Len() != 1 {
+		t.Fatalf("overwrite should not grow Len: %d", m.Len())
+	}
+}
+
+func TestMemtableDelete(t *testing.T) {
+	m := NewMemtable()
+	m.Set("k", []byte("v"))
+	m.Delete("k")
+
+	v, ok := m.Get("k")
+	if !ok {
+		t.Fatal("tombstone should be 'found' (ok=true)")
+	}
+	if v != nil {
+		t.Fatalf("tombstone should return nil value, got %q", v)
+	}
+	if m.Len() != 1 {
+		t.Fatalf("tombstone should stay in memtable: %d", m.Len())
+	}
+}
+
+func TestMemtableDeleteMissing(t *testing.T) {
+	m := NewMemtable()
+	m.Delete("nope") // mora da upiše tombstone čak i ako ključ ne postoji
+
+	v, ok := m.Get("nope")
+	if !ok || v != nil {
+		t.Fatalf("want tombstone, got %q (ok=%v)", v, ok)
+	}
+}
+
+func TestMemtableResurrectAfterDelete(t *testing.T) {
+	m := NewMemtable()
+	m.Set("k", []byte("v1"))
+	m.Delete("k")
+	m.Set("k", []byte("v2"))
+
+	v, ok := m.Get("k")
+	if !ok || string(v) != "v2" {
+		t.Fatalf("want v2 after resurrect, got %q (ok=%v)", v, ok)
+	}
+}
+
+func TestMemtableSize(t *testing.T) {
+	m := NewMemtable()
+	if m.Size() != 0 {
+		t.Fatalf("empty memtable should have size 0, got %d", m.Size())
+	}
+
+	m.Set("abc", []byte("de")) // 3 + 2 = 5
+	if m.Size() != 5 {
+		t.Fatalf("want 5, got %d", m.Size())
+	}
+
+	m.Set("abc", []byte("defg")) // overwrite: 3 + 4 = 7
+	if m.Size() != 7 {
+		t.Fatalf("after overwrite want 7, got %d", m.Size())
+	}
+
+	m.Delete("abc") // 3 + 0 = 3
+	if m.Size() != 3 {
+		t.Fatalf("after delete want 3, got %d", m.Size())
+	}
+}
+
+func TestMemtableFlush(t *testing.T) {
+	m := NewMemtable()
+	m.Set("banana", []byte("yellow"))
+	m.Set("apple", []byte("red"))
+	m.Set("cherry", []byte("dark"))
+
+	entries := m.Flush()
+	if len(entries) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(entries))
+	}
+
+	// Sortirano po ključu.
+	want := []string{"apple", "banana", "cherry"}
+	for i, e := range entries {
+		if e.key != want[i] {
+			t.Fatalf("entry %d: want %q, got %q", i, want[i], e.key)
+		}
+	}
+
+	// Flush resetuje memtable.
+	if m.Len() != 0 || m.Size() != 0 {
+		t.Fatalf("after Flush: Len=%d Size=%d", m.Len(), m.Size())
+	}
+}
+
+func TestMemtableFlushEmpty(t *testing.T) {
+	m := NewMemtable()
+	entries := m.Flush()
+	if len(entries) != 0 {
+		t.Fatalf("want 0, got %d", len(entries))
+	}
+}
+
+func TestMemtableFlushPreservesTombstone(t *testing.T) {
+	m := NewMemtable()
+	m.Set("alive", []byte("v"))
+	m.Set("dead", []byte("v"))
+	m.Delete("dead")
+
+	entries := m.Flush()
+	if len(entries) != 2 {
+		t.Fatalf("want 2, got %d", len(entries))
+	}
+	// Sortirano: "alive", "dead"
+	if entries[0].key != "alive" || entries[0].deleted {
+		t.Errorf("entry 0 mismatch: %+v", entries[0])
+	}
+	if entries[1].key != "dead" || !entries[1].deleted {
+		t.Errorf("entry 1 should be tombstone: %+v", entries[1])
+	}
+}
+
+func TestMemtableConcurrent(t *testing.T) {
+	m := NewMemtable()
+
+	const goroutines = 8
+	const perG = 100
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perG; i++ {
+				key := fmt.Sprintf("g%d-k%d", g, i)
+				m.Set(key, []byte("v"))
+				m.Get(key)
+				m.Size()
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if m.Len() != goroutines*perG {
+		t.Fatalf("want %d, got %d", goroutines*perG, m.Len())
+	}
+}
+
+func TestMemtableValueCopy(t *testing.T) {
+	m := NewMemtable()
+	buf := []byte("original")
+	m.Set("k", buf)
+
+	// Menjaj caller-ov slice — memtable ne sme da vidi promenu.
+	buf[0] = 'X'
+
+	v, _ := m.Get("k")
+	if string(v) != "original" {
+		t.Fatalf("memtable should keep a copy, got %q", v)
+	}
+}
+
+// --- Benchmark ---
+
+func BenchmarkMemtableSet(b *testing.B) {
+	m := NewMemtable()
+	key := []byte("some-key")
+	val := []byte("some-value")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Set(string(key), val)
+	}
+}
+
+func BenchmarkMemtableGet(b *testing.B) {
+	m := NewMemtable()
+	for i := 0; i < 10000; i++ {
+		m.Set(fmt.Sprintf("key-%d", i), []byte("v"))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Get("key-5000")
+	}
 }
