@@ -659,3 +659,123 @@ func BenchmarkMemtableGet(b *testing.B) {
 		m.Get("key-5000")
 	}
 }
+
+func TestBloomNoFalseNegatives(t *testing.T) {
+	bf := NewBloomFilter(1000, 0.01)
+	for i := 0; i < 1000; i++ {
+		bf.Add(fmt.Sprintf("key-%d", i))
+	}
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		if !bf.MayContain(key) {
+			t.Fatalf("false negative for %q — filter mora uvek vraćati true za dodate ključeve", key)
+		}
+	}
+}
+
+func TestBloomEmptyFilter(t *testing.T) {
+	bf := NewBloomFilter(100, 0.01)
+	// Prazan filter mora vraćati false za sve (svi bitovi su 0).
+	for i := 0; i < 100; i++ {
+		if bf.MayContain(fmt.Sprintf("anything-%d", i)) {
+			t.Fatalf("empty filter returned true for absent key")
+		}
+	}
+}
+
+func TestBloomFalsePositiveRate(t *testing.T) {
+	const n = 1000
+	const target = 0.01
+	bf := NewBloomFilter(n, target)
+	for i := 0; i < n; i++ {
+		bf.Add(fmt.Sprintf("present-%d", i))
+	}
+
+	const trials = 20000
+	fp := 0
+	for i := 0; i < trials; i++ {
+		if bf.MayContain(fmt.Sprintf("absent-%d", i)) {
+			fp++
+		}
+	}
+	rate := float64(fp) / trials
+	t.Logf("false positive rate: %.4f (target %.4f)", rate, target)
+
+	// Dozvoljavamo 3x target zbog statističke varijanse.
+	if rate > target*3 {
+		t.Fatalf("false positive rate too high: %.4f", rate)
+	}
+}
+
+func TestBloomEncodeDecode(t *testing.T) {
+	bf := NewBloomFilter(500, 0.01)
+	for i := 0; i < 500; i++ {
+		bf.Add(fmt.Sprintf("k-%d", i))
+	}
+
+	encoded := bf.Encode()
+	decoded, err := DecodeBloomFilter(encoded)
+	if err != nil {
+		t.Fatalf("DecodeBloomFilter: %v", err)
+	}
+
+	// Svi ključevi iz originala moraju biti u dekodiranom.
+	for i := 0; i < 500; i++ {
+		key := fmt.Sprintf("k-%d", i)
+		if !decoded.MayContain(key) {
+			t.Fatalf("decoded filter lost key %q", key)
+		}
+	}
+}
+
+func TestBloomDecodeTruncated(t *testing.T) {
+	_, err := DecodeBloomFilter([]byte{1, 2, 3})
+	if err == nil {
+		t.Fatal("expected error for truncated data")
+	}
+}
+
+func TestBloomLongKeys(t *testing.T) {
+	bf := NewBloomFilter(10, 0.01)
+	longKey := string(make([]byte, 10000)) // 10KB ključ
+	bf.Add(longKey)
+
+	if !bf.MayContain(longKey) {
+		t.Fatal("long key lost")
+	}
+}
+
+func TestBloomDuplicateAdd(t *testing.T) {
+	bf := NewBloomFilter(100, 0.01)
+	bf.Add("k")
+	bf.Add("k")
+	bf.Add("k")
+
+	if !bf.MayContain("k") {
+		t.Fatal("duplicate add broke filter")
+	}
+}
+
+// --- Benchmark ---
+
+func BenchmarkBloomAdd(b *testing.B) {
+	bf := NewBloomFilter(100000, 0.01)
+	key := "some-key-value"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bf.Add(key)
+	}
+}
+
+func BenchmarkBloomMayContain(b *testing.B) {
+	bf := NewBloomFilter(100000, 0.01)
+	for i := 0; i < 100000; i++ {
+		bf.Add(fmt.Sprintf("key-%d", i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bf.MayContain("key-50000")
+	}
+}
