@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 )
@@ -777,5 +778,291 @@ func BenchmarkBloomMayContain(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		bf.MayContain("key-50000")
+	}
+}
+
+// --- SSTable tests ---
+
+// writeTestSSTable pravi SSTable od map-e i vraća otvorenu instancu.
+func writeTestSSTable(t *testing.T, entries []Entry) (*SSTable, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.sst")
+	sst, err := WriteSSTable(path, entries)
+	if err != nil {
+		t.Fatalf("WriteSSTable: %v", err)
+	}
+	t.Cleanup(func() { sst.Close() })
+	return sst, path
+}
+
+func sortedEntries(pairs map[string]string) []Entry {
+	keys := make([]string, 0, len(pairs))
+	for k := range pairs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	entries := make([]Entry, 0, len(keys))
+	for _, k := range keys {
+		entries = append(entries, Entry{key: k, value: []byte(pairs[k])})
+	}
+	return entries
+}
+
+func TestSSTableWriteReadBasic(t *testing.T) {
+	data := map[string]string{
+		"apple":  "red",
+		"banana": "yellow",
+		"cherry": "dark",
+	}
+	sst, _ := writeTestSSTable(t, sortedEntries(data))
+
+	for k, want := range data {
+		v, found, err := sst.Get(k)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+		if !found {
+			t.Fatalf("Get(%q): not found", k)
+		}
+		if string(v) != want {
+			t.Fatalf("Get(%q) = %q, want %q", k, v, want)
+		}
+	}
+}
+
+func TestSSTableGetMissing(t *testing.T) {
+	sst, _ := writeTestSSTable(t, sortedEntries(map[string]string{
+		"a": "1", "c": "3", "e": "5",
+	}))
+
+	for _, k := range []string{"b", "d", "f", "0", "z"} {
+		_, found, err := sst.Get(k)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+		if found {
+			t.Fatalf("Get(%q): unexpected found", k)
+		}
+	}
+}
+
+func TestSSTableTombstone(t *testing.T) {
+	entries := []Entry{
+		{key: "alive", value: []byte("v")},
+		{key: "dead", value: nil, deleted: true},
+	}
+	sst, _ := writeTestSSTable(t, entries)
+
+	_, found, err := sst.Get("dead")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("tombstone should be found")
+	}
+	v, found, _ := sst.Get("dead")
+	if v != nil {
+		t.Fatalf("tombstone should return nil, got %q", v)
+	}
+	if !found {
+		t.Fatal("tombstone should be found=true")
+	}
+
+	v, found, _ = sst.Get("alive")
+	if !found || string(v) != "v" {
+		t.Fatalf("alive key mismatch: v=%q found=%v", v, found)
+	}
+}
+
+func TestSSTableEmptyValue(t *testing.T) {
+	sst, _ := writeTestSSTable(t, []Entry{
+		{key: "empty", value: []byte{}},
+	})
+
+	v, found, _ := sst.Get("empty")
+	if !found {
+		t.Fatal("empty value should be found")
+	}
+	if v == nil {
+		t.Fatal("empty value must be non-nil (that's tombstone)")
+	}
+	if len(v) != 0 {
+		t.Fatalf("want empty, got %q", v)
+	}
+}
+
+func TestSSTableManyBlocks(t *testing.T) {
+	// Napravi dovoljno entries da pređe 4KB po bloku → više blokova.
+	const n = 500
+	data := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		data[fmt.Sprintf("key-%04d", i)] = fmt.Sprintf("value-%04d", i)
+	}
+	sst, _ := writeTestSSTable(t, sortedEntries(data))
+
+	if sst.NumBlocks() < 2 {
+		t.Fatalf("want multiple blocks, got %d", sst.NumBlocks())
+	}
+
+	// Svi ključevi moraju biti čitljivi.
+	for k, want := range data {
+		v, found, err := sst.Get(k)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+		if !found || string(v) != want {
+			t.Fatalf("Get(%q) = %q, %v; want %q", k, v, found, want)
+		}
+	}
+}
+
+func TestSSTableIterator(t *testing.T) {
+	data := map[string]string{
+		"a": "1", "b": "2", "c": "3", "d": "4",
+	}
+	sst, _ := writeTestSSTable(t, sortedEntries(data))
+
+	it := sst.Iterator()
+	var got []string
+	for it.Next() {
+		got = append(got, it.Key())
+	}
+	if err := it.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"a", "b", "c", "d"}
+	if len(got) != len(want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("entry %d: want %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
+func TestSSTableIteratorManyBlocks(t *testing.T) {
+	const n = 1000
+	entries := make([]Entry, 0, n)
+	for i := 0; i < n; i++ {
+		entries = append(entries, Entry{
+			key:   fmt.Sprintf("k-%05d", i),
+			value: []byte("v"),
+		})
+	}
+	sst, _ := writeTestSSTable(t, entries)
+
+	it := sst.Iterator()
+	count := 0
+	for it.Next() {
+		count++
+	}
+	if it.Err() != nil {
+		t.Fatal(it.Err())
+	}
+	if count != n {
+		t.Fatalf("want %d, got %d", n, count)
+	}
+}
+
+func TestSSTableIteratorTombstones(t *testing.T) {
+	entries := []Entry{
+		{key: "a", value: []byte("1")},
+		{key: "b", deleted: true},
+		{key: "c", value: []byte("3")},
+	}
+	sst, _ := writeTestSSTable(t, entries)
+
+	it := sst.Iterator()
+	var got []Entry
+	for it.Next() {
+		got = append(got, Entry{
+			key:     it.Key(),
+			value:   it.Value(),
+			deleted: it.Deleted(),
+		})
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3, got %d", len(got))
+	}
+	if got[1].key != "b" || !got[1].deleted {
+		t.Errorf("middle should be tombstone: %+v", got[1])
+	}
+}
+
+func TestSSTablePersistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "persist.sst")
+
+	entries := []Entry{
+		{key: "a", value: []byte("1")},
+		{key: "b", value: []byte("2")},
+	}
+	sst, err := WriteSSTable(path, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sst.Close()
+
+	// Reopen.
+	sst2, err := OpenSSTable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sst2.Close()
+
+	v, found, _ := sst2.Get("a")
+	if !found || string(v) != "1" {
+		t.Fatalf("after reopen: %q, %v", v, found)
+	}
+}
+
+// --- Benchmark ---
+
+func BenchmarkSSTableGet(b *testing.B) {
+	dir := b.TempDir()
+	path := filepath.Join(dir, "bench.sst")
+
+	const n = 10000
+	entries := make([]Entry, 0, n)
+	for i := 0; i < n; i++ {
+		entries = append(entries, Entry{
+			key:   fmt.Sprintf("key-%05d", i),
+			value: []byte("value"),
+		})
+	}
+	sst, err := WriteSSTable(path, entries)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer sst.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sst.Get("key-05000")
+	}
+}
+
+func BenchmarkSSTableWrite(b *testing.B) {
+	const n = 10000
+	entries := make([]Entry, 0, n)
+	for i := 0; i < n; i++ {
+		entries = append(entries, Entry{
+			key:   fmt.Sprintf("key-%05d", i),
+			value: []byte("value"),
+		})
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dir := b.TempDir()
+		path := filepath.Join(dir, "bench.sst")
+		sst, err := WriteSSTable(path, entries)
+		if err != nil {
+			b.Fatal(err)
+		}
+		sst.Close()
 	}
 }

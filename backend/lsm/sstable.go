@@ -46,29 +46,32 @@ func WriteSSTable(path string, entries []Entry) (*SSTable, error) {
 		return nil, errors.New("sstable: cannot write empty table")
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
-	if err != nil {
+	if err := writeSSTableFile(path, entries); err != nil {
+		os.Remove(path)
 		return nil, err
 	}
-	success := false
-	defer func() {
-		if !success {
-			f.Close()
-			os.Remove(path)
-		}
-	}()
+	return OpenSSTable(path)
+}
+
+// writeSSTableFile writes all blocks, index, bloom and footer to the file,
+// and fsyncs. The file handle is always closed before returning.
+func writeSSTableFile(path string, entries []Entry) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
 	w := bufio.NewWriter(f)
 	var offset int64
 	var index []IndexBlock
 
-	// 1. Data blocks — chunkujemo po target size.
+	// 1. Data blocks.
 	i := 0
 	for i < len(entries) {
 		firstKey := entries[i].key
 		blockOff := offset
 
-		// Pripremi payload (rezerviši 4B za count, patch-ujemo posle).
 		payload := make([]byte, 4)
 		count := 0
 		for i < len(entries) && len(payload) < dataBlockTargetSize {
@@ -78,14 +81,13 @@ func WriteSSTable(path string, entries []Entry) (*SSTable, error) {
 		}
 		binary.BigEndian.PutUint32(payload[0:4], uint32(count))
 
-		// Upiši [len:8][payload].
 		var lenBuf [8]byte
 		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(payload)))
 		if _, err := w.Write(lenBuf[:]); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := w.Write(payload); err != nil {
-			return nil, err
+			return err
 		}
 
 		total := int64(8 + len(payload))
@@ -106,10 +108,10 @@ func WriteSSTable(path string, entries []Entry) (*SSTable, error) {
 		var lenBuf [8]byte
 		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(indexPayload)))
 		if _, err := w.Write(lenBuf[:]); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := w.Write(indexPayload); err != nil {
-			return nil, err
+			return err
 		}
 		offset += int64(8 + len(indexPayload))
 	}
@@ -126,10 +128,10 @@ func WriteSSTable(path string, entries []Entry) (*SSTable, error) {
 		var lenBuf [8]byte
 		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(bloomData)))
 		if _, err := w.Write(lenBuf[:]); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := w.Write(bloomData); err != nil {
-			return nil, err
+			return err
 		}
 		offset += int64(8 + len(bloomData))
 	}
@@ -143,18 +145,13 @@ func WriteSSTable(path string, entries []Entry) (*SSTable, error) {
 	binary.BigEndian.PutUint64(footer[24:32], uint64(bloomLen))
 	binary.BigEndian.PutUint64(footer[32:40], uint64(numBlocks))
 	if _, err := w.Write(footer[:]); err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := w.Flush(); err != nil {
-		return nil, err
+		return err
 	}
-	if err := f.Sync(); err != nil {
-		return nil, err
-	}
-	success = true
-
-	return OpenSSTable(path)
+	return f.Sync()
 }
 
 func OpenSSTable(path string) (*SSTable, error) {
