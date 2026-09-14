@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1064,5 +1065,341 @@ func BenchmarkSSTableWrite(b *testing.B) {
 			b.Fatal(err)
 		}
 		sst.Close()
+	}
+}
+
+// --- LSM engine tests ---
+
+func newTestLSM(t *testing.T) (*LSM, string) {
+	t.Helper()
+	dir := t.TempDir()
+	l, err := NewLSM(dir)
+	if err != nil {
+		t.Fatalf("NewLSM: %v", err)
+	}
+	// Mali threshold za testove — inače čekamo 4MB da flush-uje.
+	l.SetFlushThreshold(8 * 1024) // 8KB
+	t.Cleanup(func() { l.Close() })
+	return l, dir
+}
+
+func TestLSMSetGet(t *testing.T) {
+	l, _ := newTestLSM(t)
+	if err := l.Set("foo", []byte("bar")); err != nil {
+		t.Fatal(err)
+	}
+	v, err := l.Get("foo")
+	if err != nil || string(v) != "bar" {
+		t.Fatalf("want bar, got %q, %v", v, err)
+	}
+}
+
+func TestLSMGetMissing(t *testing.T) {
+	l, _ := newTestLSM(t)
+	_, err := l.Get("nope")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestLSMDelete(t *testing.T) {
+	l, _ := newTestLSM(t)
+	l.Set("k", []byte("v"))
+	if err := l.Delete("k"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := l.Get("k")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestLSMOverwrite(t *testing.T) {
+	l, _ := newTestLSM(t)
+	l.Set("k", []byte("v1"))
+	l.Set("k", []byte("v2"))
+	v, err := l.Get("k")
+	if err != nil || string(v) != "v2" {
+		t.Fatalf("want v2, got %q, %v", v, err)
+	}
+}
+
+func TestLSMEmptyValue(t *testing.T) {
+	l, _ := newTestLSM(t)
+	l.Set("empty", []byte{})
+	v, err := l.Get("empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v == nil {
+		t.Fatal("empty value must be non-nil")
+	}
+	if len(v) != 0 {
+		t.Fatalf("want empty, got %q", v)
+	}
+}
+
+func TestLSMFlushToSSTable(t *testing.T) {
+	l, dir := newTestLSM(t)
+
+	// 8KB threshold + ~40B/entry → flush svakih ~200 entries.
+	const n = 1000
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("key-%05d", i)
+		if err := l.Set(key, []byte("value-padding-padding-padding")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Proveri da je bar jedan SSTable nastao.
+	entries, _ := os.ReadDir(filepath.Join(dir, "sstables"))
+	if len(entries) == 0 {
+		t.Fatal("expected at least one SSTable after flush")
+	}
+
+	// Svi ključevi moraju biti čitljivi.
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("key-%05d", i)
+		v, err := l.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if string(v) != "value-padding-padding-padding" {
+			t.Fatalf("Get(%q) mismatch", key)
+		}
+	}
+}
+
+func TestLSMMultipleFlushes(t *testing.T) {
+	l, dir := newTestLSM(t)
+
+	const batches = 3
+	const perBatch = 500
+	for b := 0; b < batches; b++ {
+		for i := 0; i < perBatch; i++ {
+			l.Set(fmt.Sprintf("b%d-k%05d", b, i), []byte("value-padding-padding-padding"))
+		}
+	}
+
+	entries, _ := os.ReadDir(filepath.Join(dir, "sstables"))
+	if len(entries) < 2 {
+		t.Fatalf("expected multiple SSTables, got %d", len(entries))
+	}
+
+	// Svi ključevi iz svih batcheva čitljivi (search ide kroz sve SSTables).
+	for b := 0; b < batches; b++ {
+		for i := 0; i < perBatch; i += 50 {
+			k := fmt.Sprintf("b%d-k%05d", b, i)
+			if _, err := l.Get(k); err != nil {
+				t.Fatalf("Get(%q): %v", k, err)
+			}
+		}
+	}
+}
+
+func TestLSMOverwriteAcrossFlush(t *testing.T) {
+	l, _ := newTestLSM(t)
+
+	for i := 0; i < 500; i++ {
+		l.Set(fmt.Sprintf("key-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	// Ovim je verovatno već flush-ovano.
+
+	// Overwrite ključa koji je možda u SSTable-u.
+	l.Set("key-00042", []byte("NEW"))
+
+	v, err := l.Get("key-00042")
+	if err != nil || string(v) != "NEW" {
+		t.Fatalf("want NEW, got %q, %v", v, err)
+	}
+}
+
+func TestLSMDeleteAcrossFlush(t *testing.T) {
+	l, _ := newTestLSM(t)
+
+	for i := 0; i < 500; i++ {
+		l.Set(fmt.Sprintf("key-%05d", i), []byte("value-padding-padding-padding"))
+	}
+
+	l.Delete("key-00042")
+
+	_, err := l.Get("key-00042")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestLSMPersistenceViaWAL(t *testing.T) {
+	dir := t.TempDir()
+
+	// Sesija 1: upiši, zatvori (bez flush-a).
+	l, err := NewLSM(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Set("persist1", []byte("v1"))
+	l.Set("persist2", []byte("v2"))
+	l.Close()
+
+	// Sesija 2: otvori, proveri (WAL replay).
+	l2, err := NewLSM(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+
+	v, err := l2.Get("persist1")
+	if err != nil || string(v) != "v1" {
+		t.Fatalf("after reopen: %q, %v", v, err)
+	}
+	v, err = l2.Get("persist2")
+	if err != nil || string(v) != "v2" {
+		t.Fatalf("after reopen: %q, %v", v, err)
+	}
+}
+
+func TestLSMPersistenceAfterFlush(t *testing.T) {
+	dir := t.TempDir()
+
+	l, err := NewLSM(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetFlushThreshold(8 * 1024)
+
+	const n = 1000
+	for i := 0; i < n; i++ {
+		l.Set(fmt.Sprintf("k-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	l.Close()
+
+	// Reopen i proveri da su podaci u SSTable-ovima.
+	l2, err := NewLSM(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+
+	for i := 0; i < n; i += 100 {
+		k := fmt.Sprintf("k-%05d", i)
+		v, err := l2.Get(k)
+		if err != nil {
+			t.Fatalf("after reopen Get(%q): %v", k, err)
+		}
+		if string(v) != "value-padding-padding-padding" {
+			t.Fatalf("after reopen Get(%q) mismatch", k)
+		}
+	}
+}
+
+func TestLSMDeletePersistsViaWAL(t *testing.T) {
+	dir := t.TempDir()
+
+	l, _ := NewLSM(dir)
+	l.Set("k", []byte("v"))
+	l.Delete("k")
+	l.Close()
+
+	l2, _ := NewLSM(dir)
+	defer l2.Close()
+
+	_, err := l2.Get("k")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestLSMConcurrentWrites(t *testing.T) {
+	l, _ := newTestLSM(t)
+
+	const goroutines = 8
+	const perG = 100
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perG; i++ {
+				key := fmt.Sprintf("g%d-k%d", g, i)
+				if err := l.Set(key, []byte("v")); err != nil {
+					t.Errorf("Set(%q): %v", key, err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	for g := 0; g < goroutines; g++ {
+		for i := 0; i < perG; i++ {
+			k := fmt.Sprintf("g%d-k%d", g, i)
+			if _, err := l.Get(k); err != nil {
+				t.Fatalf("Get(%q): %v", k, err)
+			}
+		}
+	}
+}
+
+func TestLSMConcurrentReads(t *testing.T) {
+	l, _ := newTestLSM(t)
+	for i := 0; i < 100; i++ {
+		l.Set(fmt.Sprintf("k%d", i), []byte("v"))
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				l.Get(fmt.Sprintf("k%d", i%100))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestLSMCloseIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := NewLSM(dir)
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// --- Benchmark ---
+
+func BenchmarkLSMSet(b *testing.B) {
+	dir := b.TempDir()
+	l, err := NewLSM(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer l.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		l.Set(fmt.Sprintf("key-%d", i), []byte("value"))
+	}
+}
+
+func BenchmarkLSMGet(b *testing.B) {
+	dir := b.TempDir()
+	l, err := NewLSM(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer l.Close()
+
+	for i := 0; i < 10000; i++ {
+		l.Set(fmt.Sprintf("key-%05d", i), []byte("value"))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		l.Get("key-05000")
 	}
 }

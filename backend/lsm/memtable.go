@@ -103,3 +103,23 @@ func (m *Memtable) Flush() []Entry {
 	m.size = 0
 	return entries
 }
+
+// Snapshot returns a sorted copy of all records without modifying the memtable.
+// Used in LSM flush: first we record the state, then we write the SSTable,
+// only then do we reset the memtable. If write fails, the memtable is intact.
+func (m *Memtable) Snapshot() []Entry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries := make([]Entry, 0, m.BTree.Len())
+	m.BTree.Ascend(func(item btree.Item) bool {
+		e := item.(*memEntry)
+		entries = append(entries, Entry{
+			key:     e.Key,
+			value:   e.Value,
+			deleted: e.Deleted,
+		})
+		return true
+	})
+	return entries
+}
