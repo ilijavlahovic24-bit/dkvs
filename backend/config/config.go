@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"hash/fnv"
 
 	"github.com/BurntSushi/toml"
 )
@@ -36,6 +35,8 @@ type Shards struct {
 	Count  int
 	CurIdx int
 	Addrs  map[int]string
+	ring   *Ring // consistent hashing ring
+
 }
 
 // ParseShards converts and verifies the list of shards
@@ -67,16 +68,23 @@ func ParseShards(shards []Shard, curShardName string) (*Shards, error) {
 		return nil, fmt.Errorf("shard %q was not found", curShardName)
 	}
 
+	ring := NewRing(addrs, DefaultVnodes)
+
 	return &Shards{
 		Addrs:  addrs,
 		Count:  shardCount,
 		CurIdx: shardIdx,
+		ring:   ring,
 	}, nil
 }
 
 // Index returns the shard number for the corresponding key.
+// Shard gets index from the consistent hashing ring.
 func (s *Shards) Index(key string) int {
-	h := fnv.New64()
-	h.Write([]byte(key))
-	return int(h.Sum64() % uint64(s.Count))
+	if s.ring == nil {
+		// Fallback to modulo if ring is uninitialized.
+		// This would only happen if the Shards were constructed manually.
+		return int(hashKey(key) % uint64(s.Count))
+	}
+	return s.ring.GetShardIdx(key)
 }
