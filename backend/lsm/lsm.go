@@ -228,15 +228,21 @@ func (l *LSM) flushLocked() error {
 		return fmt.Errorf("lsm: flush: %w", err)
 	}
 
-	// Tek sada je bezbedno resetovati memtable.
-	l.memtable.Flush() // briše sadržaj, ignorišemo return
-
-	// Novi SSTable ide na početak (najnoviji prvi).
+	l.memtable.Flush()
 	l.sstables = append([]*SSTable{sst}, l.sstables...)
 	l.nextSST++
 
-	// Podaci su sada durable u SSTable-u — WAL može da se obriše.
-	return l.wal.Clear()
+	if err := l.wal.Clear(); err != nil {
+		return err
+	}
+	//Automatic compaction when too many SSTables accumulate.
+	if len(l.sstables) >= compactThreshold {
+		if err := l.compactLocked(); err != nil {
+			// No rollback flush - compaction will be retried on next flush.
+			return fmt.Errorf("lsm: auto-compaction: %w", err)
+		}
+	}
+	return nil
 }
 
 // SetFlushThreshold changes the flush threshold (useful in tests).
@@ -247,4 +253,65 @@ func (l *LSM) SetFlushThreshold(bytes int) {
 	if bytes > 0 {
 		l.flushThreshold = bytes
 	}
+}
+
+func (l *LSM) Flush() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.closed {
+		return errors.New("lsm: closed")
+	}
+	return l.flushLocked()
+}
+
+func (l *LSM) Iterate(fn func(key string, value []byte) bool) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	if l.closed {
+		return errors.New("lsm: closed")
+	}
+
+	type entry struct {
+		value   []byte
+		deleted bool
+	}
+	seen := make(map[string]entry)
+
+	// 1. SSTables from newest to oldest.
+	for _, sst := range l.sstables {
+		it := sst.Iterator()
+		for it.Next() {
+			k := it.Key()
+			if _, exists := seen[k]; !exists {
+				seen[k] = entry{value: it.Value(), deleted: it.Deleted()}
+			}
+		}
+		if err := it.Err(); err != nil {
+			return err
+		}
+	}
+	// 2. Memtable snapshot.
+	for _, e := range l.memtable.Snapshot() {
+		seen[e.key] = entry{value: e.value, deleted: e.deleted}
+	}
+
+	// 3. Sort keys and call fn in order.
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		e := seen[k]
+		if e.deleted {
+			continue
+		}
+		if !fn(k, e.value) {
+			return nil
+		}
+	}
+	return nil
 }

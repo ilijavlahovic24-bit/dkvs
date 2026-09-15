@@ -1403,3 +1403,195 @@ func BenchmarkLSMGet(b *testing.B) {
 		l.Get("key-05000")
 	}
 }
+
+// --- Compaction tests ---
+
+func TestCompactionMergesTables(t *testing.T) {
+	l, dir := newTestLSM(t)
+	l.SetFlushThreshold(2 * 1024)
+
+	const n = 3000
+	for i := 0; i < n; i++ {
+		l.Set(fmt.Sprintf("k-%05d", i), []byte("value-padding-padding-padding-padding"))
+	}
+
+	entries, _ := os.ReadDir(filepath.Join(dir, "sstables"))
+	if len(entries) >= compactThreshold {
+		t.Fatalf("auto-compaction should have reduced SSTables, got %d", len(entries))
+	}
+
+	for i := 0; i < n; i += 100 {
+		k := fmt.Sprintf("k-%05d", i)
+		if _, err := l.Get(k); err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+	}
+}
+
+func TestCompactionKeepsNewest(t *testing.T) {
+	l, _ := newTestLSM(t)
+	l.SetFlushThreshold(2 * 1024)
+
+	// Prvo upiši v1 — neka se flush-uje.
+	for i := 0; i < 100; i++ {
+		l.Set(fmt.Sprintf("pad-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	l.Set("target", []byte("v1"))
+
+	// Zatim još podataka da se flush-uje i target završi u starijem SSTable-u.
+	for i := 0; i < 200; i++ {
+		l.Set(fmt.Sprintf("pad2-%05d", i), []byte("value-padding-padding-padding"))
+	}
+
+	// Sada overwrite target — novija verzija.
+	l.Set("target", []byte("v2"))
+
+	// Forsiraj compaction.
+	if err := l.Compact(); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := l.Get("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(v) != "v2" {
+		t.Fatalf("want v2, got %q", v)
+	}
+}
+func TestCompactionDropsTombstones(t *testing.T) {
+	l, _ := newTestLSM(t)
+	l.SetFlushThreshold(2 * 1024)
+
+	for i := 0; i < 100; i++ {
+		l.Set(fmt.Sprintf("pad-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	l.Set("doomed", []byte("value"))
+
+	for i := 0; i < 200; i++ {
+		l.Set(fmt.Sprintf("pad2-%05d", i), []byte("value-padding-padding-padding"))
+	}
+
+	l.Delete("doomed")
+
+	if err := l.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.Compact(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := l.Get("doomed")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+
+	entries, _ := os.ReadDir(l.sstDir)
+	for _, e := range entries {
+		path := filepath.Join(l.sstDir, e.Name())
+		sst, err := OpenSSTable(path)
+		if err != nil {
+			t.Fatalf("open %s: %v", path, err)
+		}
+		it := sst.Iterator()
+		for it.Next() {
+			if it.Key() == "doomed" {
+				t.Errorf("key %q survived compaction (deleted=%v)", "doomed", it.Deleted())
+			}
+		}
+		sst.Close()
+	}
+}
+
+func TestCompactionPersistence(t *testing.T) {
+	dir := t.TempDir()
+
+	l, err := NewLSM(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetFlushThreshold(2 * 1024)
+
+	const n = 2000
+	for i := 0; i < n; i++ {
+		l.Set(fmt.Sprintf("k-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	if err := l.Compact(); err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+
+	// Reopen i proveri.
+	l2, err := NewLSM(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+
+	for i := 0; i < n; i += 50 {
+		k := fmt.Sprintf("k-%05d", i)
+		if _, err := l2.Get(k); err != nil {
+			t.Fatalf("after reopen Get(%q): %v", k, err)
+		}
+	}
+}
+
+func TestCompactionAllTombstones(t *testing.T) {
+	l, dir := newTestLSM(t)
+	l.SetFlushThreshold(2 * 1024)
+
+	const n = 200
+	for i := 0; i < n; i++ {
+		l.Set(fmt.Sprintf("k-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	for i := 0; i < n; i++ {
+		l.Delete(fmt.Sprintf("k-%05d", i))
+	}
+
+	for i := 0; i < 200; i++ {
+		l.Set(fmt.Sprintf("pad-%05d", i), []byte("value-padding-padding-padding"))
+	}
+	for i := 0; i < 200; i++ {
+		l.Delete(fmt.Sprintf("pad-%05d", i))
+	}
+
+	if err := l.Compact(); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("k-%05d", i)
+		_, err := l.Get(k)
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get(%q): want ErrNotFound, got %v", k, err)
+		}
+	}
+
+	entries, _ := os.ReadDir(filepath.Join(dir, "sstables"))
+	t.Logf("SSTables after compaction: %d", len(entries))
+}
+
+func TestCompactionReducesFileCount(t *testing.T) {
+	l, dir := newTestLSM(t)
+	l.SetFlushThreshold(2 * 1024)
+
+	const n = 10000
+	for i := 0; i < n; i++ {
+		l.Set(fmt.Sprintf("k-%06d", i), []byte("value-padding-padding-padding-padding"))
+	}
+
+	entries, _ := os.ReadDir(filepath.Join(dir, "sstables"))
+	// Threshold is 4, so after auto-compaction there should be no more than 3.
+	if len(entries) >= compactThreshold {
+		t.Fatalf("expected < %d SSTables, got %d", compactThreshold, len(entries))
+	}
+
+	// All keys must be readable.
+	for i := 0; i < n; i += 500 {
+		k := fmt.Sprintf("k-%06d", i)
+		if _, err := l.Get(k); err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+	}
+}
