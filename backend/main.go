@@ -13,7 +13,7 @@ import (
 
 // importovati moje package
 var (
-	dbLocation = flag.String("db-location", "", "The path to the bolt db database")
+	dbLocation = flag.String("db-location", "", "The path to the LSM database")
 	httpAddr   = flag.String("http-addr", "127.0.0.1:8080", "HTTP host and port")
 	configFile = flag.String("config-file", "sharding.toml", "Config file for static sharding")
 	shard      = flag.String("shard", "", "The name of the shard for the data")
