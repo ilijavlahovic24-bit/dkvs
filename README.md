@@ -1,5 +1,5 @@
 DKVS: High Performance Distributed Key Value Store
-## Status: Active Development
+## Status: Completed
 
 ## What DKVS Does
 DKVS is a distributed key-value store that shards data across multiple nodes using consistent hashing. 
@@ -41,13 +41,9 @@ cd backend
 ### Completed
 -Distributed get and Set opeartions
 -Distributed sharding
-
-### In Progress
 -LSM-Tree implementation - Kleppmann
 -Web dashboard
 
-### Planned
-Consistency guarantees - Kleppmann
 
 
 ## References and Documentation
