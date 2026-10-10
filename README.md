@@ -39,10 +39,10 @@ cd backend
     └──replication  # replication
 ```
 ### Completed
--Distributed get and Set opeartions
--Distributed sharding
--LSM-Tree implementation - Kleppmann
--Web dashboard
+- Distributed get and Set opeartions
+- Distributed sharding
+- LSM-Tree implementation - Kleppmann
+- Web dashboard
 
 
 
